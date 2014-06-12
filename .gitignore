@@ -1,0 +1,8 @@
+*.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+selective_drop_caches.ko
+selective_drop_caches.mod.c
+selective_drop_caches.mod.o
+selective_drop_caches.o
