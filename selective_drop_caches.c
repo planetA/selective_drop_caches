@@ -24,80 +24,6 @@ MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Selective pagecache drop module");
 MODULE_AUTHOR("Maksym Planeta");
 
-#if 0
-/* A global variable is a bit ugly, but it keeps the code simple */
-int sysctl_drop_caches;
-
-static void drop_pagecache_sb(struct super_block *sb, void *unused)
-{
-	struct inode *inode, *toput_inode = NULL;
-
-	spin_lock(&inode_sb_list_lock);
-	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
-		spin_lock(&inode->i_lock);
-		if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
-		    (inode->i_mapping->nrpages == 0)) {
-			spin_unlock(&inode->i_lock);
-			continue;
-		}
-		__iget(inode);
-		spin_unlock(&inode->i_lock);
-		spin_unlock(&inode_sb_list_lock);
-		invalidate_mapping_pages(inode->i_mapping, 0, -1);
-		iput(toput_inode);
-		toput_inode = inode;
-		spin_lock(&inode_sb_list_lock);
-	}
-	spin_unlock(&inode_sb_list_lock);
-	iput(toput_inode);
-}
-
-static void drop_slab(void)
-{
-	int nr_objects;
-	struct shrink_control shrink = {
-		.gfp_mask = GFP_KERNEL,
-	};
-
-	nodes_setall(shrink.nodes_to_scan);
-	do {
-		nr_objects = shrink_slab(&shrink, 1000, 1000);
-	} while (nr_objects > 10);
-}
-
-int drop_caches_sysctl_handler(struct ctl_table *table, int write,
-	void __user *buffer, size_t *length, loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec_minmax(table, write, buffer, length, ppos);
-	if (ret)
-		return ret;
-	if (write) {
-		static int stfu;
-
-		if (sysctl_drop_caches & 1) {
-			iterate_supers(drop_pagecache_sb, NULL);
-			count_vm_event(DROP_PAGECACHE);
-		}
-		if (sysctl_drop_caches & 2) {
-			drop_slab();
-			count_vm_event(DROP_SLAB);
-		}
-		if (!stfu) {
-			pr_info("%s (%d): drop_caches: %d\n",
-				current->comm, task_pid_nr(current),
-				sysctl_drop_caches);
-		}
-		stfu |= sysctl_drop_caches & 4;
-	}
-	return 0;
-}
-
-#endif
-
-/* static char scdrop_path[PATH_MAX]; */
-
 static void clean_mapping(struct dentry *dentry)
 {
 	struct inode *inode = dentry->d_inode;
@@ -111,54 +37,6 @@ static void clean_mapping(struct dentry *dentry)
 	}
 
 	invalidate_mapping_pages(inode->i_mapping, 0, -1);
-
-	printk(KERN_INFO "I want to clean %s inode %p diname %s flags %x\n",
-	       dentry->d_name.name, dentry->d_inode, dentry->d_iname,
-	       dentry->d_flags);
-	return;
-
-
-#if 0
-	struct list_head *node;
-
-	//	spin_lock(&dentry->d_lock);
-	node = dentry->d_subdirs.next;
-	while (node != &dentry->d_subdirs) {
-		struct dentry *d = list_entry(node, struct dentry, d_u.d_child);
-
-		//	spin_lock_nested(&d->d_lock, DENTRY_D_LOCK_NESTED);
-
-		if (d->d_inode)// {
-			//	dget_dlock(d);
-			//spin_unlock(&dentry->d_lock);
-			//spin_unlock(&d->d_lock);
-
-			invalidate_mapping_pages(d->d_inode->i_mapping, 0, -1);
-
-		//dput(d);
-		//spin_lock(&dentry->d_lock);
-		//		} else
-		//	spin_unlock(&d->d_lock);
-		node = dentry->d_subdirs.next;
-	}
-
-	//	spin_unlock(&dentry->d_lock);
-
-	return;
-#elif 0
-	printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
-	spin_lock(&inode->i_lock);
-	if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
-	    (inode->i_mapping->nrpages == 0)) {
-		printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
-		spin_unlock(&inode->i_lock);
-		return;
-	}
-	ihold(inode);
-	spin_unlock(&inode->i_lock);
-	invalidate_mapping_pages(inode->i_mapping, 0, -1);
-	iput(inode);
-#endif
 }
 
 static void clean_all_dentries_locked(struct dentry *dentry)
@@ -185,44 +63,28 @@ static int scdrop_pagecache(const char * __user filename)
 	struct path path;
 	int error;
 
-	printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
 retry:
 	error = user_path_at(AT_FDCWD, filename, lookup_flags, &path);
-	printk(KERN_INFO "WAH %s %d err %d\n", __FUNCTION__, __LINE__, error);
 	if (!error) {
 		/* clean */
 		clean_all_dentries(path.dentry);
 	}
-	printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
 	if (retry_estale(error, lookup_flags)) {
-		printk(KERN_INFO "WAH %s %d", __FUNCTION__, __LINE__);
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
-	printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
 	return error;
 }
 
 static int scdrop_ctl_handler(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos)
 {
-	/* int ret; */
-
 	char __user *pathname = buffer + *lenp - 1;
 
 	put_user('\0', pathname);
 
-	/* if ((ret = proc_dostring(table, write, buffer, lenp, ppos))) { */
-	/* 	printk(KERN_INFO "%s: Failed to fetch file path\n", */
-	/* 	       __FUNCTION__); */
-	/* 	return ret; */
-	/* } */
-
 	if (!write)
 		return 0;
-
-	/* printk(KERN_INFO "%s: Got this name: \"%s\"\n", */
-	/*        __FUNCTION__, scdrop_path); */
 
 	return scdrop_pagecache(buffer);
 }
@@ -231,8 +93,6 @@ static struct ctl_path vm_path[] = { { .procname = "vm", }, { } };
 static struct ctl_table scdrop_ctl_table[] = {
 	{
 		.procname = "sdrop_caches",
-		/* .data = scdrop_path, */
-		/* .maxlen = PATH_MAX, */
 		.mode = 0644,
 		.proc_handler = scdrop_ctl_handler,
 	},
