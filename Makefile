@@ -1,5 +1,6 @@
 TARGET := selective_drop_caches
 obj-m += $(TARGET).o
+CFLAGS_$(TARGET).o = -O0
 
 KERNEL_SRC ?= ~/src/linux-2.6
 
