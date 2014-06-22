@@ -98,6 +98,87 @@ int drop_caches_sysctl_handler(struct ctl_table *table, int write,
 
 /* static char scdrop_path[PATH_MAX]; */
 
+static void clean_mapping(struct dentry *dentry)
+{
+	struct inode *inode = dentry->d_inode;
+
+	if (!inode)
+		return;
+
+	if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
+	    (inode->i_mapping->nrpages == 0)) {
+		return;
+	}
+
+	invalidate_mapping_pages(inode->i_mapping, 0, -1);
+
+	printk(KERN_INFO "I want to clean %s inode %p diname %s flags %x\n",
+	       dentry->d_name.name, dentry->d_inode, dentry->d_iname,
+	       dentry->d_flags);
+	return;
+
+
+#if 0
+	struct list_head *node;
+
+	//	spin_lock(&dentry->d_lock);
+	node = dentry->d_subdirs.next;
+	while (node != &dentry->d_subdirs) {
+		struct dentry *d = list_entry(node, struct dentry, d_u.d_child);
+
+		//	spin_lock_nested(&d->d_lock, DENTRY_D_LOCK_NESTED);
+
+		if (d->d_inode)// {
+			//	dget_dlock(d);
+			//spin_unlock(&dentry->d_lock);
+			//spin_unlock(&d->d_lock);
+
+			invalidate_mapping_pages(d->d_inode->i_mapping, 0, -1);
+
+		//dput(d);
+		//spin_lock(&dentry->d_lock);
+		//		} else
+		//	spin_unlock(&d->d_lock);
+		node = dentry->d_subdirs.next;
+	}
+
+	//	spin_unlock(&dentry->d_lock);
+
+	return;
+#elif 0
+	printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
+	spin_lock(&inode->i_lock);
+	if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
+	    (inode->i_mapping->nrpages == 0)) {
+		printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
+		spin_unlock(&inode->i_lock);
+		return;
+	}
+	ihold(inode);
+	spin_unlock(&inode->i_lock);
+	invalidate_mapping_pages(inode->i_mapping, 0, -1);
+	iput(inode);
+#endif
+}
+
+static void clean_all_dentries_locked(struct dentry *dentry)
+{
+	struct dentry *child;
+
+	list_for_each_entry(child, &dentry->d_subdirs, d_u.d_child) {
+		clean_all_dentries_locked(child);
+	}
+
+	clean_mapping(dentry);
+}
+
+static void clean_all_dentries(struct dentry *dentry)
+{
+	spin_lock_nested(&dentry->d_lock, DENTRY_D_LOCK_NESTED);
+	clean_all_dentries_locked(dentry);
+	spin_unlock(&dentry->d_lock);
+}
+
 static int scdrop_pagecache(const char * __user filename)
 {
 	unsigned int lookup_flags = LOOKUP_FOLLOW;
@@ -110,19 +191,7 @@ retry:
 	printk(KERN_INFO "WAH %s %d err %d\n", __FUNCTION__, __LINE__, error);
 	if (!error) {
 		/* clean */
-		struct inode *inode = path.dentry->d_inode;
-		printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
-		spin_lock(&inode->i_lock);
-		if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
-		    (inode->i_mapping->nrpages == 0)) {
-			printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
-			spin_unlock(&inode->i_lock);
-			return 0;
-		}
-		ihold(inode);
-		spin_unlock(&inode->i_lock);
-		invalidate_mapping_pages(inode->i_mapping, 0, -1);
-		iput(inode);
+		clean_all_dentries(path.dentry);
 	}
 	printk(KERN_INFO "WAH %s %d\n", __FUNCTION__, __LINE__);
 	if (retry_estale(error, lookup_flags)) {
