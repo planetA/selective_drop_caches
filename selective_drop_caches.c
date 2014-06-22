@@ -31,6 +31,8 @@ static void clean_mapping(struct dentry *dentry)
 	if (!inode)
 		return;
 
+	printk(KERN_INFO "Clean %s with %d pages\n", dentry->d_name.name,
+	       inode->i_mapping ? inode->i_mapping->nrpages : -1);
 	if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
 	    (inode->i_mapping->nrpages == 0)) {
 		return;
